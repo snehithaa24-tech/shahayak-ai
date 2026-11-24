@@ -165,3 +165,5 @@ This utility performs an end-to-end handshake:
 - **No Raw Audio Stored**: Voice audio captured from the microphone is streamed directly in memory to Google Gemini Live and is never saved to any database or file system.
 - **Transcripts Off by Default**: Conversation transcripts are only stored if the user explicitly turns on the "Save transcripts" toggle.
 - **Tenant Isolation**: Row-Level Security (RLS) is enabled on all Supabase tables, ensuring users can only read, modify, or delete their own preferences, conversations, and turns.
+#   s h a h a y a k - a i  
+ 
