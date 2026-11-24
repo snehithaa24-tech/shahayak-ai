@@ -362,14 +362,22 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     setInterimAssistantText('');
   }, [cleanupResources]);
 
-  // Send typed message into Live session
+  // Send typed message into Live session (connects automatically if not started)
   const sendTypedMessage = useCallback(
-    (text: string) => {
-      if (!text.trim() || !liveClientRef.current) return;
-      liveClientRef.current.sendTextMessage(text.trim());
-      setSessionState('Responding');
+    async (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+
+      if (!liveClientRef.current || !liveClientRef.current.getIsConnected()) {
+        await startSession();
+      }
+
+      if (liveClientRef.current) {
+        liveClientRef.current.sendTextMessage(trimmed);
+        setSessionState('Responding');
+      }
     },
-    []
+    [startSession]
   );
 
   // Clear conversation transcript

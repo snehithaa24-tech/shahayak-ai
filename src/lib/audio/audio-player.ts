@@ -28,7 +28,7 @@ export class AudioPlayer {
   public async ensureContext(): Promise<AudioContext> {
     if (!this.audioContext || this.audioContext.state === 'closed') {
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      this.audioContext = new AudioCtx({ sampleRate: this.sampleRate });
+      this.audioContext = new AudioCtx();
     }
 
     if (this.audioContext.state === 'suspended') {

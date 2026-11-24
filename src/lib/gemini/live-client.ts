@@ -90,6 +90,11 @@ export class GeminiLiveClient {
               this.config.onInterrupted?.();
             }
 
+            // Handle output transcript (spoken words text from Gemini Live)
+            if (serverContent.outputTranscription && serverContent.outputTranscription.text) {
+              this.config.onTranscriptChunk?.(serverContent.outputTranscription.text, false);
+            }
+
             // Handle incoming model audio / text parts
             if (serverContent.modelTurn && Array.isArray(serverContent.modelTurn.parts)) {
               for (const part of serverContent.modelTurn.parts) {

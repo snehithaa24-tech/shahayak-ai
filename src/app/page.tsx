@@ -521,7 +521,7 @@ export default function HomePage() {
               />
               <button
                 type="submit"
-                disabled={!typedMessage.trim() || !isCallActive}
+                disabled={!typedMessage.trim() || sessionState === 'Connecting'}
                 className="inline-flex items-center justify-center rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed p-2.5 text-white transition-colors"
                 title="Send text to assistant"
               >
