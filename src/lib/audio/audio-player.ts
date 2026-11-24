@@ -18,14 +18,13 @@ export class AudioPlayer {
 
   constructor(options: AudioPlayerOptions = {}) {
     this.sampleRate = options.sampleRate ?? 24000;
-    // Bounded buffer large enough for long voice answers (up to 2000 chunks ~ 40 seconds)
     this.maxQueueSize = options.maxQueueSize ?? 2000;
     this.onSpeakingChange = options.onSpeakingChange;
   }
 
   /**
-   * Initializes or unlocks the AudioContext within a user gesture.
-   * Uses device native sample rate for universal hardware speaker compatibility.
+   * Initializes and unlocks the AudioContext within a user gesture.
+   * Plays a silent 1-sample buffer to permanently unlock browser autoplay permissions.
    */
   public async ensureContext(): Promise<AudioContext> {
     if (!this.audioContext || this.audioContext.state === 'closed') {
@@ -41,6 +40,17 @@ export class AudioPlayer {
       } catch (err) {
         console.warn('[AudioPlayer] AudioContext resume error:', err);
       }
+    }
+
+    // Permanently unlock Web Audio playback
+    try {
+      const unlockBuffer = this.audioContext.createBuffer(1, 1, 22050);
+      const unlockSource = this.audioContext.createBufferSource();
+      unlockSource.buffer = unlockBuffer;
+      unlockSource.connect(this.audioContext.destination);
+      unlockSource.start(0);
+    } catch {
+      // Ignore unlock buffer errors
     }
 
     return this.audioContext;
@@ -60,7 +70,7 @@ export class AudioPlayer {
     const floatData = pcm16ToFloat32(pcmData);
     if (floatData.length === 0) return;
 
-    // Create 24000 Hz audio buffer. The browser natively resamples to hardware output rate (e.g. 48kHz).
+    // Create 24000 Hz audio buffer. The browser natively resamples to hardware rate (e.g. 48kHz).
     const audioBuffer = ctx.createBuffer(1, floatData.length, this.sampleRate);
     audioBuffer.getChannelData(0).set(floatData);
 
@@ -133,5 +143,9 @@ export class AudioPlayer {
 
   public getIsPlaying(): boolean {
     return this.isPlaying;
+  }
+
+  public getAudioContext(): AudioContext | null {
+    return this.audioContext;
   }
 }

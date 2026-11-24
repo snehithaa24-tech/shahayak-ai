@@ -3,6 +3,11 @@ import { resampleAudio, floatTo16BitPCM } from './pcm-utils';
 export interface AudioRecorderOptions {
   targetSampleRate?: number; // 16000 Hz for Gemini Live audio input
   onAudioData?: (pcm16Chunk: Uint8Array) => void;
+  onVolumeChange?: (volume: number) => void; // Normalized volume 0..1 for UI visualizer
+  onSpeechStart?: () => void;
+  onSpeechEnd?: () => void;
+  speechThreshold?: number; // RMS threshold to detect user speech (default 0.015)
+  silenceDurationMs?: number; // Silence duration to trigger speech end (default 900ms)
   onError?: (error: Error, code: 'permission_denied' | 'device_not_found' | 'in_use' | 'unknown') => void;
 }
 
@@ -13,22 +18,38 @@ export class AudioRecorder {
   private processorNode: ScriptProcessorNode | null = null;
   private muteNode: GainNode | null = null;
   private isRecording = false;
+  private isMuted = false;
+
+  // Voice Activity Detection (VAD) state
+  private isUserSpeaking = false;
+  private lastSpeechTimestamp = 0;
+  private silenceTimer: NodeJS.Timeout | null = null;
+  private readonly speechThreshold: number;
+  private readonly silenceDurationMs: number;
 
   private readonly targetSampleRate: number;
   private readonly onAudioData?: (pcm16Chunk: Uint8Array) => void;
+  private readonly onVolumeChange?: (volume: number) => void;
+  private readonly onSpeechStart?: () => void;
+  private readonly onSpeechEnd?: () => void;
   private readonly onError?: (error: Error, code: 'permission_denied' | 'device_not_found' | 'in_use' | 'unknown') => void;
 
   constructor(options: AudioRecorderOptions = {}) {
     this.targetSampleRate = options.targetSampleRate ?? 16000;
+    this.speechThreshold = options.speechThreshold ?? 0.015;
+    this.silenceDurationMs = options.silenceDurationMs ?? 950;
     this.onAudioData = options.onAudioData;
+    this.onVolumeChange = options.onVolumeChange;
+    this.onSpeechStart = options.onSpeechStart;
+    this.onSpeechEnd = options.onSpeechEnd;
     this.onError = options.onError;
   }
 
   /**
    * Requests microphone access and begins capturing audio.
-   * MUST be invoked directly from a user gesture handler.
+   * Can accept an existing active AudioContext to preserve user activation.
    */
-  public async start(): Promise<void> {
+  public async start(existingContext?: AudioContext): Promise<void> {
     if (this.isRecording) return;
 
     try {
@@ -41,10 +62,14 @@ export class AudioRecorder {
         },
       });
 
-      const AudioCtx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      this.audioContext = new AudioCtx();
+      if (existingContext && existingContext.state !== 'closed') {
+        this.audioContext = existingContext;
+      } else {
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        this.audioContext = new AudioCtx();
+      }
 
       if (this.audioContext.state === 'suspended') {
         await this.audioContext.resume();
@@ -53,15 +78,50 @@ export class AudioRecorder {
       const captureSampleRate = this.audioContext.sampleRate;
       this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
 
-      // Buffer size of 4096 samples (~85ms at 48kHz)
-      const bufferSize = 4096;
+      // Buffer size of 2048 samples (~42ms at 48kHz) for lower latency and responsive VAD
+      const bufferSize = 2048;
       this.processorNode = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
 
       this.processorNode.onaudioprocess = (event: AudioProcessingEvent) => {
-        if (!this.isRecording) return;
+        if (!this.isRecording || this.isMuted) return;
 
         const inputChannel = event.inputBuffer.getChannelData(0);
-        // Resample from hardware capture rate (e.g. 44100 or 48000 Hz) to target 16000 Hz
+
+        // Compute RMS (energy level) for VAD and UI visualizer
+        let sum = 0;
+        for (let i = 0; i < inputChannel.length; i++) {
+          sum += inputChannel[i] * inputChannel[i];
+        }
+        const rms = Math.sqrt(sum / inputChannel.length);
+        const normalizedVolume = Math.min(1, rms * 5); // Scale for visualizer
+        this.onVolumeChange?.(normalizedVolume);
+
+        // VAD logic
+        const now = Date.now();
+        if (rms >= this.speechThreshold) {
+          this.lastSpeechTimestamp = now;
+          if (!this.isUserSpeaking) {
+            this.isUserSpeaking = true;
+            this.onSpeechStart?.();
+          }
+
+          if (this.silenceTimer) {
+            clearTimeout(this.silenceTimer);
+            this.silenceTimer = null;
+          }
+        } else if (this.isUserSpeaking) {
+          if (!this.silenceTimer) {
+            this.silenceTimer = setTimeout(() => {
+              if (this.isUserSpeaking && Date.now() - this.lastSpeechTimestamp >= this.silenceDurationMs) {
+                this.isUserSpeaking = false;
+                this.onSpeechEnd?.();
+              }
+              this.silenceTimer = null;
+            }, this.silenceDurationMs);
+          }
+        }
+
+        // Resample from hardware capture rate to target 16000 Hz
         const resampled = resampleAudio(inputChannel, captureSampleRate, this.targetSampleRate);
         const pcm16 = floatTo16BitPCM(resampled);
 
@@ -97,10 +157,39 @@ export class AudioRecorder {
   }
 
   /**
+   * Toggles microphone mute state during an active call.
+   */
+  public setMuted(muted: boolean): void {
+    this.isMuted = muted;
+    if (this.mediaStream) {
+      this.mediaStream.getAudioTracks().forEach((track) => {
+        track.enabled = !muted;
+      });
+    }
+  }
+
+  public getIsMuted(): boolean {
+    return this.isMuted;
+  }
+
+  /**
+   * Resets VAD state when model begins speaking or after a turn completes.
+   */
+  public resetSpeechDetection(): void {
+    this.isUserSpeaking = false;
+    this.lastSpeechTimestamp = 0;
+    if (this.silenceTimer) {
+      clearTimeout(this.silenceTimer);
+      this.silenceTimer = null;
+    }
+  }
+
+  /**
    * Immediately stops recording and releases hardware microphone tracks.
    */
   public stop(): void {
     this.isRecording = false;
+    this.resetSpeechDetection();
 
     if (this.processorNode) {
       this.processorNode.onaudioprocess = null;
@@ -142,16 +231,8 @@ export class AudioRecorder {
       this.mediaStream = null;
     }
 
-    if (this.audioContext && this.audioContext.state !== 'closed') {
-      try {
-        this.audioContext.close();
-      } catch {
-        // Ignore close errors
-      }
-      this.audioContext = null;
-    }
-
-    console.log('[AudioRecorder] Microphone released and audio context closed.');
+    this.audioContext = null;
+    console.log('[AudioRecorder] Microphone released.');
   }
 
   public getIsRecording(): boolean {

@@ -28,12 +28,15 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
   const [interimAssistantText, setInterimAssistantText] = useState<string>('');
   const [errorInfo, setErrorInfo] = useState<VoiceSessionError | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [micVolume, setMicVolume] = useState<number>(0);
+  const [isMuted, setIsMuted] = useState<boolean>(false);
 
   // References to audio and network resources
   const audioRecorderRef = useRef<AudioRecorder | null>(null);
   const audioPlayerRef = useRef<AudioPlayer | null>(null);
   const liveClientRef = useRef<GeminiLiveClient | null>(null);
   const currentAssistantTurnIdRef = useRef<string | null>(null);
+  const assistantAccumulatedTextRef = useRef<string>('');
 
   // Clean up all resources
   const cleanupResources = useCallback(async () => {
@@ -53,6 +56,9 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     }
 
     currentAssistantTurnIdRef.current = null;
+    assistantAccumulatedTextRef.current = '';
+    setMicVolume(0);
+    setIsMuted(false);
   }, []);
 
   // Handle errors
@@ -73,6 +79,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
       audioPlayerRef.current.stopAndClear();
     }
     setInterimAssistantText('');
+    assistantAccumulatedTextRef.current = '';
     setSessionState('Listening');
   }, []);
 
@@ -100,6 +107,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
       });
 
       setInterimAssistantText('');
+      assistantAccumulatedTextRef.current = '';
       currentAssistantTurnIdRef.current = null;
 
       if (saveTranscripts && conversationId) {
@@ -191,7 +199,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
           });
           audioPlayerRef.current = player;
         }
-        await player.ensureContext();
+        const sharedCtx = await player.ensureContext();
 
         // 2. Fetch short-lived ephemeral token from backend route
         const tokenRes = await fetch('/api/live/token', {
@@ -222,7 +230,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
         console.log(`[Sahayak] Obtained token for live model: ${model}`);
 
         // 3. Connect to Gemini Live over WebSocket
-        let assistantAccumulatedText = '';
+        assistantAccumulatedTextRef.current = '';
 
         const liveClient = new GeminiLiveClient({
           token,
@@ -232,6 +240,8 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
           },
           onAudioChunk: (pcmBytes) => {
             setSessionState('Speaking');
+            // If user was previously speaking, reset speech state
+            audioRecorderRef.current?.resetSpeechDetection();
             player!.queueAudioChunk(pcmBytes);
           },
           onTranscriptChunk: (text, isUser) => {
@@ -239,18 +249,16 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
               appendUserTurn(text);
             } else {
               setSessionState('Responding');
-              assistantAccumulatedText += text;
-              setInterimAssistantText(assistantAccumulatedText);
+              assistantAccumulatedTextRef.current += text;
+              setInterimAssistantText(assistantAccumulatedTextRef.current);
             }
           },
           onInterrupted: () => {
-            assistantAccumulatedText = '';
             handleInterruption();
           },
           onTurnComplete: () => {
-            if (assistantAccumulatedText) {
-              finalizeAssistantTurn(assistantAccumulatedText);
-              assistantAccumulatedText = '';
+            if (assistantAccumulatedTextRef.current) {
+              finalizeAssistantTurn(assistantAccumulatedTextRef.current);
             }
             setSessionState('Listening');
           },
@@ -277,6 +285,21 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
             onAudioData: (pcm16Chunk) => {
               liveClient.sendAudioChunk(pcm16Chunk);
             },
+            onVolumeChange: (vol) => {
+              setMicVolume(vol);
+            },
+            onSpeechStart: () => {
+              // If model was speaking when user begins talking, interrupt model
+              if (audioPlayerRef.current?.getIsPlaying()) {
+                handleInterruption();
+              }
+              setSessionState('Listening');
+            },
+            onSpeechEnd: () => {
+              console.log('[Sahayak] User speech paused/ended, triggering Gemini response.');
+              setSessionState('Responding');
+              liveClient.sendTurnComplete();
+            },
             onError: (_err, code) => {
               if (code === 'permission_denied') {
                 triggerError('permission_denied');
@@ -289,7 +312,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
           });
 
           audioRecorderRef.current = recorder;
-          await recorder.start();
+          await recorder.start(sharedCtx);
         }
 
         // 5. Setup conversation record in Supabase if save is enabled
@@ -345,6 +368,27 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     setInterimAssistantText('');
   }, [cleanupResources]);
 
+  // Toggle microphone mute
+  const toggleMute = useCallback(() => {
+    if (audioRecorderRef.current) {
+      const nextMuted = !isMuted;
+      audioRecorderRef.current.setMuted(nextMuted);
+      setIsMuted(nextMuted);
+      if (nextMuted) {
+        setMicVolume(0);
+      }
+    }
+  }, [isMuted]);
+
+  // Manually signal user turn complete (e.g. "Done Speaking" button)
+  const triggerTurnComplete = useCallback(() => {
+    if (liveClientRef.current && liveClientRef.current.getIsConnected()) {
+      console.log('[Sahayak] User tapped Done Speaking, sending turnComplete');
+      setSessionState('Responding');
+      liveClientRef.current.sendTurnComplete();
+    }
+  }, []);
+
   // Send typed message into Live session (connects automatically if not already started)
   const sendTypedMessage = useCallback(
     async (text: string) => {
@@ -398,6 +442,10 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     interimUserText,
     interimAssistantText,
     errorInfo,
+    micVolume,
+    isMuted,
+    toggleMute,
+    triggerTurnComplete,
     startSession,
     endSession,
     handleInterruption,

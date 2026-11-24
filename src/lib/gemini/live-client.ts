@@ -171,6 +171,21 @@ export class GeminiLiveClient {
   }
 
   /**
+   * Signals Gemini Live that the user turn is complete, triggering immediate response synthesis.
+   */
+  public sendTurnComplete(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+    const msg = {
+      clientContent: {
+        turnComplete: true,
+      },
+    };
+
+    this.ws.send(JSON.stringify(msg));
+  }
+
+  /**
    * Sends typed text input into the active Live session for users who cannot speak.
    */
   public sendTextMessage(text: string): void {
