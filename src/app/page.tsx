@@ -308,7 +308,7 @@ export default function HomePage() {
             {!isCallActive ? (
               <button
                 type="button"
-                onClick={startSession}
+                onClick={() => startSession({ enableMic: true })}
                 className="group relative mt-2 flex h-24 w-24 sm:h-28 sm:w-28 items-center justify-center rounded-full bg-blue-600 text-white shadow-xl shadow-blue-600/30 transition-all hover:bg-blue-500 hover:scale-105 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-400 active:scale-95"
                 aria-label="Start voice call (बातचीत शुरू करें)"
               >

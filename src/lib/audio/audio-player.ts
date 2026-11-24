@@ -18,21 +18,29 @@ export class AudioPlayer {
 
   constructor(options: AudioPlayerOptions = {}) {
     this.sampleRate = options.sampleRate ?? 24000;
-    this.maxQueueSize = options.maxQueueSize ?? 50;
+    // Bounded buffer large enough for long voice answers (up to 2000 chunks ~ 40 seconds)
+    this.maxQueueSize = options.maxQueueSize ?? 2000;
     this.onSpeakingChange = options.onSpeakingChange;
   }
 
   /**
    * Initializes or unlocks the AudioContext within a user gesture.
+   * Uses device native sample rate for universal hardware speaker compatibility.
    */
   public async ensureContext(): Promise<AudioContext> {
     if (!this.audioContext || this.audioContext.state === 'closed') {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.audioContext = new AudioCtx();
     }
 
     if (this.audioContext.state === 'suspended') {
-      await this.audioContext.resume();
+      try {
+        await this.audioContext.resume();
+      } catch (err) {
+        console.warn('[AudioPlayer] AudioContext resume error:', err);
+      }
     }
 
     return this.audioContext;
@@ -45,13 +53,14 @@ export class AudioPlayer {
     const ctx = await this.ensureContext();
 
     if (this.queueCount >= this.maxQueueSize) {
-      // Drop chunk if queue exceeds bounded limit
+      console.warn('[AudioPlayer] Audio queue reached bounded limit, dropping chunk');
       return;
     }
 
     const floatData = pcm16ToFloat32(pcmData);
     if (floatData.length === 0) return;
 
+    // Create 24000 Hz audio buffer. The browser natively resamples to hardware output rate (e.g. 48kHz).
     const audioBuffer = ctx.createBuffer(1, floatData.length, this.sampleRate);
     audioBuffer.getChannelData(0).set(floatData);
 

@@ -11,6 +11,7 @@ export class AudioRecorder {
   private audioContext: AudioContext | null = null;
   private sourceNode: MediaStreamAudioSourceNode | null = null;
   private processorNode: ScriptProcessorNode | null = null;
+  private muteNode: GainNode | null = null;
   private isRecording = false;
 
   private readonly targetSampleRate: number;
@@ -40,7 +41,9 @@ export class AudioRecorder {
         },
       });
 
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.audioContext = new AudioCtx();
 
       if (this.audioContext.state === 'suspended') {
@@ -50,7 +53,7 @@ export class AudioRecorder {
       const captureSampleRate = this.audioContext.sampleRate;
       this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
 
-      // Buffer size of 4096 provides balance between latency (~85ms at 48kHz) and stability
+      // Buffer size of 4096 samples (~85ms at 48kHz)
       const bufferSize = 4096;
       this.processorNode = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
 
@@ -65,10 +68,16 @@ export class AudioRecorder {
         this.onAudioData?.(pcm16);
       };
 
+      // Connect processor through a muted gain node (gain = 0) to prevent acoustic feedback / echo loop
+      this.muteNode = this.audioContext.createGain();
+      this.muteNode.gain.value = 0;
+
       this.sourceNode.connect(this.processorNode);
-      this.processorNode.connect(this.audioContext.destination);
+      this.processorNode.connect(this.muteNode);
+      this.muteNode.connect(this.audioContext.destination);
 
       this.isRecording = true;
+      console.log(`[AudioRecorder] Microphone capture started (Hardware: ${captureSampleRate}Hz -> Target: ${this.targetSampleRate}Hz)`);
     } catch (err: unknown) {
       const error = err instanceof Error ? err : new Error(String(err));
       let code: 'permission_denied' | 'device_not_found' | 'in_use' | 'unknown' = 'unknown';
@@ -103,6 +112,15 @@ export class AudioRecorder {
       this.processorNode = null;
     }
 
+    if (this.muteNode) {
+      try {
+        this.muteNode.disconnect();
+      } catch {
+        // Ignore disconnect errors
+      }
+      this.muteNode = null;
+    }
+
     if (this.sourceNode) {
       try {
         this.sourceNode.disconnect();
@@ -132,6 +150,8 @@ export class AudioRecorder {
       }
       this.audioContext = null;
     }
+
+    console.log('[AudioRecorder] Microphone released and audio context closed.');
   }
 
   public getIsRecording(): boolean {
