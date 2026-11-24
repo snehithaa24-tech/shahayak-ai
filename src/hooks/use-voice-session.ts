@@ -260,6 +260,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
             if (assistantAccumulatedTextRef.current) {
               finalizeAssistantTurn(assistantAccumulatedTextRef.current);
             }
+            audioRecorderRef.current?.resetSpeechDetection();
             setSessionState('Listening');
           },
           onError: (_err, code) => {
@@ -296,6 +297,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
               setSessionState('Listening');
             },
             onSpeechEnd: () => {
+              if (audioPlayerRef.current?.getIsPlaying()) return;
               console.log('[Sahayak] User speech paused/ended, triggering Gemini response.');
               setSessionState('Responding');
               liveClient.sendTurnComplete();

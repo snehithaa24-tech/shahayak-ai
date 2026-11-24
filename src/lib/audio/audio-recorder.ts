@@ -21,10 +21,13 @@ export class AudioRecorder {
   private isMuted = false;
 
   // Voice Activity Detection (VAD) state
+  private recordingStartTime = 0;
   private isUserSpeaking = false;
   private lastSpeechTimestamp = 0;
   private silenceTimer: NodeJS.Timeout | null = null;
-  private readonly speechThreshold: number;
+  private consecutiveVoicedFrames = 0;
+  private voicedFramesInTurn = 0;
+  private noiseFloor = 0.015;
   private readonly silenceDurationMs: number;
 
   private readonly targetSampleRate: number;
@@ -36,8 +39,7 @@ export class AudioRecorder {
 
   constructor(options: AudioRecorderOptions = {}) {
     this.targetSampleRate = options.targetSampleRate ?? 16000;
-    this.speechThreshold = options.speechThreshold ?? 0.015;
-    this.silenceDurationMs = options.silenceDurationMs ?? 950;
+    this.silenceDurationMs = options.silenceDurationMs ?? 1100;
     this.onAudioData = options.onAudioData;
     this.onVolumeChange = options.onVolumeChange;
     this.onSpeechStart = options.onSpeechStart;
@@ -78,46 +80,89 @@ export class AudioRecorder {
       const captureSampleRate = this.audioContext.sampleRate;
       this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
 
-      // Buffer size of 2048 samples (~42ms at 48kHz) for lower latency and responsive VAD
+      // Buffer size of 2048 samples (~42ms at 48kHz) for low latency
       const bufferSize = 2048;
       this.processorNode = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
+
+      this.recordingStartTime = Date.now();
+      this.consecutiveVoicedFrames = 0;
+      this.voicedFramesInTurn = 0;
+      this.noiseFloor = 0.015;
 
       this.processorNode.onaudioprocess = (event: AudioProcessingEvent) => {
         if (!this.isRecording || this.isMuted) return;
 
         const inputChannel = event.inputBuffer.getChannelData(0);
 
-        // Compute RMS (energy level) for VAD and UI visualizer
+        // Compute RMS (energy level)
         let sum = 0;
         for (let i = 0; i < inputChannel.length; i++) {
           sum += inputChannel[i] * inputChannel[i];
         }
         const rms = Math.sqrt(sum / inputChannel.length);
-        const normalizedVolume = Math.min(1, rms * 5); // Scale for visualizer
+        const normalizedVolume = Math.min(1, Math.max(0, (rms - this.noiseFloor) * 6));
         this.onVolumeChange?.(normalizedVolume);
 
-        // VAD logic
         const now = Date.now();
-        if (rms >= this.speechThreshold) {
-          this.lastSpeechTimestamp = now;
-          if (!this.isUserSpeaking) {
-            this.isUserSpeaking = true;
-            this.onSpeechStart?.();
-          }
+        // Warmup: discard the first 750ms while hardware audio pipeline settles
+        if (now - this.recordingStartTime < 750) {
+          this.noiseFloor = 0.8 * this.noiseFloor + 0.2 * rms;
+          return;
+        }
 
-          if (this.silenceTimer) {
-            clearTimeout(this.silenceTimer);
-            this.silenceTimer = null;
-          }
-        } else if (this.isUserSpeaking) {
-          if (!this.silenceTimer) {
-            this.silenceTimer = setTimeout(() => {
-              if (this.isUserSpeaking && Date.now() - this.lastSpeechTimestamp >= this.silenceDurationMs) {
-                this.isUserSpeaking = false;
-                this.onSpeechEnd?.();
+        // Adaptive speech threshold: must be substantially above the moving noise floor
+        const dynamicThreshold = Math.max(0.035, this.noiseFloor * 2.8);
+
+        if (!this.isUserSpeaking) {
+          // Track background noise floor when user is not speaking
+          this.noiseFloor = 0.98 * this.noiseFloor + 0.02 * rms;
+
+          if (rms >= dynamicThreshold) {
+            this.consecutiveVoicedFrames++;
+            // Require at least 4 consecutive voiced frames (~170ms) to trigger speech start
+            if (this.consecutiveVoicedFrames >= 4) {
+              this.isUserSpeaking = true;
+              this.voicedFramesInTurn = this.consecutiveVoicedFrames;
+              this.lastSpeechTimestamp = now;
+              this.onSpeechStart?.();
+
+              if (this.silenceTimer) {
+                clearTimeout(this.silenceTimer);
+                this.silenceTimer = null;
               }
+            }
+          } else {
+            this.consecutiveVoicedFrames = 0;
+          }
+        } else {
+          // User is currently speaking
+          if (rms >= dynamicThreshold) {
+            this.lastSpeechTimestamp = now;
+            this.voicedFramesInTurn++;
+
+            if (this.silenceTimer) {
+              clearTimeout(this.silenceTimer);
               this.silenceTimer = null;
-            }, this.silenceDurationMs);
+            }
+          } else {
+            // Silence period detected
+            if (!this.silenceTimer) {
+              this.silenceTimer = setTimeout(() => {
+                if (this.isUserSpeaking && Date.now() - this.lastSpeechTimestamp >= this.silenceDurationMs) {
+                  this.isUserSpeaking = false;
+                  const hadSubstantialSpeech = this.voicedFramesInTurn >= 8; // >= ~350ms of real voice
+                  this.voicedFramesInTurn = 0;
+                  this.consecutiveVoicedFrames = 0;
+
+                  if (hadSubstantialSpeech) {
+                    this.onSpeechEnd?.();
+                  } else {
+                    console.log('[AudioRecorder] Discarding brief transient noise, not sending turnComplete');
+                  }
+                }
+                this.silenceTimer = null;
+              }, this.silenceDurationMs);
+            }
           }
         }
 
@@ -178,6 +223,8 @@ export class AudioRecorder {
   public resetSpeechDetection(): void {
     this.isUserSpeaking = false;
     this.lastSpeechTimestamp = 0;
+    this.consecutiveVoicedFrames = 0;
+    this.voicedFramesInTurn = 0;
     if (this.silenceTimer) {
       clearTimeout(this.silenceTimer);
       this.silenceTimer = null;
