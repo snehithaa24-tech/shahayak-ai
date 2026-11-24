@@ -9,6 +9,16 @@
 
 import { GoogleGenAI, Modality } from '@google/genai';
 import { WebSocket } from 'ws';
+import fs from 'fs';
+
+// Automatically load .env.local if present
+if (fs.existsSync('.env.local') && typeof process.loadEnvFile === 'function') {
+  try {
+    process.loadEnvFile('.env.local');
+  } catch (err) {
+    console.warn('Notice: Could not load .env.local via process.loadEnvFile:', err.message);
+  }
+}
 
 async function main() {
   console.log('--------------------------------------------------');

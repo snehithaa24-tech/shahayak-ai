@@ -217,11 +217,10 @@ export default function HomePage() {
                 aria-checked={language === 'en'}
                 onClick={() => handleLanguageChange('en')}
                 disabled={isCallActive}
-                className={`flex flex-col items-center justify-center rounded-xl p-3 text-sm font-semibold transition-all border ${
-                  language === 'en'
+                className={`flex flex-col items-center justify-center rounded-xl p-3 text-sm font-semibold transition-all border ${language === 'en'
                     ? 'border-blue-500 bg-blue-600/20 text-white shadow-sm ring-1 ring-blue-500'
                     : 'border-slate-800 bg-slate-950/60 text-slate-300 hover:bg-slate-800 hover:text-white'
-                } disabled:opacity-50 disabled:cursor-not-allowed`}
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
               >
                 <span className="text-base font-bold">English</span>
                 <span className="text-xs text-slate-400">Direct & Natural</span>
@@ -233,11 +232,10 @@ export default function HomePage() {
                 aria-checked={language === 'hi'}
                 onClick={() => handleLanguageChange('hi')}
                 disabled={isCallActive}
-                className={`flex flex-col items-center justify-center rounded-xl p-3 text-sm font-semibold transition-all border ${
-                  language === 'hi'
+                className={`flex flex-col items-center justify-center rounded-xl p-3 text-sm font-semibold transition-all border ${language === 'hi'
                     ? 'border-blue-500 bg-blue-600/20 text-white shadow-sm ring-1 ring-blue-500'
                     : 'border-slate-800 bg-slate-950/60 text-slate-300 hover:bg-slate-800 hover:text-white'
-                } disabled:opacity-50 disabled:cursor-not-allowed`}
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
               >
                 <span className="text-base font-bold">हिन्दी</span>
                 <span className="text-xs text-slate-400">सहज बातचीत</span>
@@ -265,13 +263,12 @@ export default function HomePage() {
                 : 'border-slate-700 bg-slate-800/80 text-slate-300'
             }">
               <Radio
-                className={`h-3.5 w-3.5 ${
-                  sessionState === 'Listening' || sessionState === 'Speaking'
+                className={`h-3.5 w-3.5 ${sessionState === 'Listening' || sessionState === 'Speaking'
                     ? 'animate-pulse text-emerald-400'
                     : sessionState === 'Connecting'
-                    ? 'animate-spin text-amber-400'
-                    : 'text-slate-400'
-                }`}
+                      ? 'animate-spin text-amber-400'
+                      : 'text-slate-400'
+                  }`}
                 aria-hidden="true"
               />
               <span>
@@ -466,11 +463,10 @@ export default function HomePage() {
                       </span>
                     </div>
                     <div
-                      className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm sm:text-base leading-relaxed ${
-                        turn.role === 'user'
+                      className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm sm:text-base leading-relaxed ${turn.role === 'user'
                           ? 'bg-blue-600 text-white rounded-tr-sm'
                           : 'bg-slate-800/90 text-slate-100 rounded-tl-sm border border-slate-700/60'
-                      }`}
+                        }`}
                     >
                       {turn.content}
                     </div>

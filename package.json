@@ -10,6 +10,7 @@
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:acceptance": "node scripts/test-acceptance-conversations.mjs",
     "verify-model": "node scripts/verify-live-model.mjs"
   },
   "dependencies": {

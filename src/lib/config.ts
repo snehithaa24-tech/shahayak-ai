@@ -61,7 +61,7 @@ export function getServerConfig(): ServerConfig {
     throw new ConfigError(missing);
   }
 
-  const geminiLiveModel = process.env.GEMINI_LIVE_MODEL?.trim() || 'gemini-2.0-flash-exp';
+  const geminiLiveModel = process.env.GEMINI_LIVE_MODEL?.trim() || 'gemini-3.8-live';
   const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim() || 'http://localhost:3000';
 
   return {
@@ -79,7 +79,7 @@ export function getServerConfig(): ServerConfig {
 export function getClientConfig(): ClientConfig {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() || '';
   const supabasePublishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim() || '';
-  const geminiLiveModel = process.env.NEXT_PUBLIC_GEMINI_LIVE_MODEL?.trim() || process.env.GEMINI_LIVE_MODEL?.trim() || 'gemini-2.0-flash-exp';
+  const geminiLiveModel = process.env.NEXT_PUBLIC_GEMINI_LIVE_MODEL?.trim() || process.env.GEMINI_LIVE_MODEL?.trim() || 'gemini-3.8-live';
   const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim() || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000');
 
   return {
