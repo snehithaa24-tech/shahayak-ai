@@ -51,6 +51,15 @@ export async function createLiveEphemeralToken(language: SupportedLanguage): Pro
           model: config.geminiLiveModel,
           config: {
             responseModalities: [Modality.AUDIO],
+            inputAudioTranscription: {},
+            outputAudioTranscription: {},
+            realtimeInputConfig: {
+              automaticActivityDetection: {
+                disabled: false,
+                prefixPaddingMs: 300,
+                silenceDurationMs: 800,
+              },
+            },
             systemInstruction: {
               parts: [{ text: systemInstruction }],
             },

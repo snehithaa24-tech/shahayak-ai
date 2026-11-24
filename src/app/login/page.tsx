@@ -3,24 +3,34 @@
 import { useState, useMemo, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import { Volume2, AlertCircle, ShieldCheck } from 'lucide-react';
+import { AlertCircle, Shield } from 'lucide-react';
+import { getAppStrings } from '@/lib/i18n';
+import { type SupportedLanguage } from '@/lib/prompt';
 
 function LoginContent() {
   const searchParams = useSearchParams();
+  const initialLang: SupportedLanguage = searchParams.get('lang') === 'hi' ? 'hi' : 'en';
+  const [language, setLanguage] = useState<SupportedLanguage>(initialLang);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+
+  const strings = getAppStrings(language);
 
   const initialError = useMemo(() => {
     const errorParam = searchParams.get('error');
     if (!errorParam) return null;
     if (errorParam === 'auth_code_missing') {
-      return 'Authentication session expired or code was missing. Please try signing in again.';
+      return strings.login.errorMissingCode;
     }
     if (errorParam.includes('access_denied') || errorParam.includes('cancel')) {
-      return 'Sign-in was canceled or access was denied. Please try again.';
+      return strings.login.errorDenied;
     }
-    return decodeURIComponent(errorParam);
-  }, [searchParams]);
+    try {
+      return decodeURIComponent(errorParam);
+    } catch {
+      return strings.login.errorGeneric;
+    }
+  }, [searchParams, strings.login.errorDenied, strings.login.errorGeneric, strings.login.errorMissingCode]);
 
   const displayedError = errorMessage || initialError;
 
@@ -49,55 +59,108 @@ function LoginContent() {
         setIsLoading(false);
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'An error occurred during Google sign in.';
+      const msg = err instanceof Error ? err.message : strings.login.errorGeneric;
       setErrorMessage(msg);
       setIsLoading(false);
     }
   };
 
   return (
-    <div className="flex min-h-[calc(100vh-4rem)] flex-col items-center justify-center px-4 py-12 sm:px-6 lg:px-8">
-      <div className="w-full max-w-md space-y-8 rounded-2xl border border-slate-800 bg-slate-900/90 p-6 sm:p-8 shadow-2xl backdrop-blur-sm">
-        {/* Brand Header */}
-        <div className="text-center space-y-3">
-          <div className="inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-600/20 text-blue-400 ring-1 ring-blue-500/30">
-            <Volume2 className="h-8 w-8 text-blue-400" aria-hidden="true" />
+    <main className="flex min-h-dvh flex-col items-center justify-center px-4 py-10 sm:px-6">
+      <div className="w-full max-w-md space-y-6 rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-6 sm:p-8 shadow-[var(--shadow-card)]">
+        {/* Language Toggle */}
+        <div className="flex justify-end">
+          <div
+            role="radiogroup"
+            aria-label={strings.ready.languageLabel}
+            className="inline-flex items-center rounded-[8px] border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-0.5 text-xs"
+          >
+            <button
+              type="button"
+              role="radio"
+              aria-checked={language === 'en'}
+              onClick={() => setLanguage('en')}
+              className={`min-h-[34px] rounded-[6px] px-3 font-medium transition-colors ${
+                language === 'en'
+                  ? 'bg-[var(--bg-surface)] text-[var(--ink-primary)] shadow-[0_1px_2px_rgba(36,40,34,0.06)]'
+                  : 'text-[var(--ink-secondary)] hover:text-[var(--ink-primary)]'
+              }`}
+            >
+              English
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={language === 'hi'}
+              onClick={() => setLanguage('hi')}
+              lang="hi"
+              className={`font-devanagari-safe min-h-[34px] rounded-[6px] px-3 font-medium transition-colors ${
+                language === 'hi'
+                  ? 'bg-[var(--bg-surface)] text-[var(--ink-primary)] shadow-[0_1px_2px_rgba(36,40,34,0.06)]'
+                  : 'text-[var(--ink-secondary)] hover:text-[var(--ink-primary)]'
+              }`}
+            >
+              हिन्दी
+            </button>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
-            SAHAYAK AI <span className="text-blue-400 font-normal">(सहायक)</span>
-          </h1>
-          <p className="text-sm sm:text-base text-slate-400 max-w-sm mx-auto leading-relaxed">
-            Accessible bilingual voice assistant in <span className="text-slate-200 font-medium">हिन्दी</span> &{' '}
-            <span className="text-slate-200 font-medium">English</span> powered by Google Gemini Live.
-          </p>
         </div>
 
-        {/* Error Alert */}
+        {/* Brand Identity */}
+        <div className="text-center space-y-3">
+          <div
+            className="mx-auto inline-flex h-12 w-12 items-center justify-center rounded-[12px] border border-[var(--accent-border)] bg-[var(--accent-tint)] text-[var(--accent-primary)]"
+            aria-hidden="true"
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
+              <line x1="6" y1="9" x2="6" y2="15" />
+              <line x1="10" y1="5" x2="10" y2="19" />
+              <line x1="14" y1="7" x2="14" y2="17" />
+              <line x1="18" y1="10" x2="18" y2="14" />
+            </svg>
+          </div>
+
+          <div className="space-y-1">
+            <h1 className="flex items-baseline justify-center gap-2.5 text-2xl sm:text-3xl font-medium text-[var(--ink-primary)]">
+              <span className="font-display tracking-tight">{strings.brandLatin}</span>
+              <span className="text-lg text-[var(--border-strong)]" aria-hidden="true">
+                /
+              </span>
+              <span lang="hi" className="font-devanagari-safe text-xl sm:text-2xl text-[var(--accent-primary)]">
+                {strings.brandDevanagari}
+              </span>
+            </h1>
+            <p lang={language} className="mx-auto max-w-[20rem] text-sm sm:text-[15px] leading-[1.65] text-pretty text-[var(--ink-secondary)]">
+              {strings.login.tagline}
+            </p>
+          </div>
+        </div>
+
+        {/* Auth Error Alert */}
         {displayedError && (
           <div
             role="alert"
-            className="flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-950/40 p-4 text-sm text-red-200"
+            className="flex items-start gap-3 rounded-[10px] border border-[var(--danger-border)] bg-[var(--danger-tint)] p-3.5 text-xs sm:text-sm text-[var(--danger-ink)]"
           >
-            <AlertCircle className="h-5 w-5 flex-shrink-0 text-red-400 mt-0.5" aria-hidden="true" />
-            <div className="flex-1">
-              <p className="font-semibold text-red-300">Sign-in Notice</p>
-              <p className="mt-1 text-slate-300">{displayedError}</p>
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--danger-primary)]" strokeWidth={1.75} aria-hidden="true" />
+            <div className="min-w-0 flex-1 space-y-1">
+              <p className="font-semibold text-[var(--danger-primary)]">{strings.login.errorHeading}</p>
+              <p className="leading-relaxed text-[var(--ink-primary)]">{displayedError}</p>
             </div>
           </div>
         )}
 
-        {/* Action Button */}
-        <div className="space-y-4">
+        {/* Google OAuth Button */}
+        <div>
           <button
             type="button"
-            onClick={handleGoogleSignIn}
+            onClick={() => void handleGoogleSignIn()}
             disabled={isLoading}
-            className="group relative flex w-full items-center justify-center gap-3 rounded-xl border border-slate-700 bg-slate-800/90 px-4 py-3.5 text-sm sm:text-base font-semibold text-white shadow-sm transition-all hover:bg-slate-700/80 hover:border-slate-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:opacity-60 disabled:cursor-not-allowed"
+            className="flex min-h-[48px] w-full items-center justify-center gap-3 rounded-[10px] border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-4 py-3 text-sm sm:text-base font-medium text-[var(--ink-primary)] shadow-[0_1px_2px_rgba(36,40,34,0.04)] transition-colors hover:bg-[var(--bg-subtle)] disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {isLoading ? (
-              <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-solid border-white border-r-transparent" />
+              <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-solid border-[var(--accent-primary)] border-r-transparent" />
             ) : (
-              <svg className="h-5 w-5" viewBox="0 0 24 24" aria-hidden="true">
+              <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
                 <path
                   fill="#4285F4"
                   d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -116,44 +179,41 @@ function LoginContent() {
                 />
               </svg>
             )}
-            <span>{isLoading ? 'Connecting...' : 'Continue with Google'}</span>
+            <span>{isLoading ? strings.login.connecting : strings.login.continueWithGoogle}</span>
           </button>
         </div>
 
-        {/* Privacy Note */}
-        <div className="rounded-xl border border-slate-800/80 bg-slate-950/60 p-4 text-xs text-slate-400 space-y-2">
-          <div className="flex items-center gap-2 font-medium text-slate-300">
-            <ShieldCheck className="h-4 w-4 text-emerald-400" aria-hidden="true" />
-            <span>Privacy & Audio Processing</span>
+        {/* Calm Privacy Note */}
+        <div className="rounded-[12px] border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-4 text-xs leading-[1.65] text-[var(--ink-secondary)] space-y-2">
+          <div className="flex items-center gap-2 font-medium text-[var(--ink-primary)]">
+            <Shield className="h-4 w-4 shrink-0 text-[var(--accent-primary)]" strokeWidth={1.75} aria-hidden="true" />
+            <span>{strings.login.privacyHeading}</span>
           </div>
+          <p>{strings.login.privacyBody}</p>
           <p>
-            Microphone audio is streamed directly to Google Gemini Live for real-time speech-to-speech processing.
-            Transcripts are never saved unless you explicitly toggle on &ldquo;Save transcript&rdquo;.
-          </p>
-          <p>
-            Subject to{' '}
+            {strings.privacy.subjectTo}{' '}
             <a
               href="https://policies.google.com/privacy"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-400 underline hover:text-blue-300"
+              className="font-medium text-[var(--ink-primary)] underline underline-offset-2 hover:text-[var(--accent-primary)]"
             >
-              Google Privacy Policy
+              {strings.privacy.googlePrivacy}
             </a>{' '}
-            and{' '}
+            {strings.privacy.and}{' '}
             <a
               href="https://ai.google.dev/gemini-api/terms"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-400 underline hover:text-blue-300"
+              className="font-medium text-[var(--ink-primary)] underline underline-offset-2 hover:text-[var(--accent-primary)]"
             >
-              Gemini API Terms
+              {strings.privacy.geminiTerms}
             </a>
             .
           </p>
         </div>
       </div>
-    </div>
+    </main>
   );
 }
 
@@ -161,8 +221,8 @@ export default function LoginPage() {
   return (
     <Suspense
       fallback={
-        <div className="flex min-h-screen items-center justify-center text-slate-400">
-          Loading login...
+        <div className="flex min-h-dvh items-center justify-center text-sm text-[var(--ink-secondary)]">
+          Loading sign-in…
         </div>
       }
     >

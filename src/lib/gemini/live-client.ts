@@ -6,6 +6,7 @@ export interface LiveClientConfig {
   onOpen?: () => void;
   onAudioChunk?: (pcm24kData: Uint8Array) => void;
   onTranscriptChunk?: (text: string, isUser: boolean) => void;
+  onInputTranscription?: (text: string, finished: boolean) => void;
   onInterrupted?: () => void;
   onTurnComplete?: () => void;
   onError?: (error: Error, code: string) => void;
@@ -85,6 +86,12 @@ export class GeminiLiveClient {
 
           const serverContent = response.serverContent;
           if (serverContent) {
+            if (serverContent.inputTranscription) {
+              this.config.onInputTranscription?.(
+                serverContent.inputTranscription.text || '',
+                serverContent.inputTranscription.finished === true,
+              );
+            }
             // Handle Interruption
             if (serverContent.interrupted) {
               this.config.onInterrupted?.();
@@ -104,10 +111,8 @@ export class GeminiLiveClient {
                   this.config.onAudioChunk?.(pcmBytes);
                 }
 
-                // Text transcript (if model sends textual representation)
-                if (part.text) {
-                  this.config.onTranscriptChunk?.(part.text, false);
-                }
+                // Spoken text comes from outputTranscription. modelTurn text may
+                // contain thoughts or duplicate the spoken transcript.
               }
             }
 
@@ -125,12 +130,15 @@ export class GeminiLiveClient {
       this.ws.onerror = () => {
         const error = new Error('Gemini Live WebSocket encountered a network or protocol error.');
         this.config.onError?.(error, 'ws_error');
-        if (!this.isConnected) {
+        if (!this.isSetupDone) {
           reject(error);
         }
       };
 
       this.ws.onclose = (event: CloseEvent) => {
+        if (!this.isSetupDone) {
+          reject(new Error('Gemini Live closed before session setup completed.'));
+        }
         this.isConnected = false;
         this.isSetupDone = false;
 
@@ -153,17 +161,15 @@ export class GeminiLiveClient {
    * Sends a 16-bit linear PCM audio chunk (16000 Hz) to Gemini Live.
    */
   public sendAudioChunk(pcm16Bytes: Uint8Array): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || !this.getIsConnected() || this.ws.readyState !== WebSocket.OPEN) return;
 
     const base64Data = arrayBufferToBase64(pcm16Bytes);
     const msg = {
       realtimeInput: {
-        mediaChunks: [
-          {
-            mimeType: 'audio/pcm;rate=16000',
-            data: base64Data,
-          },
-        ],
+        audio: {
+          mimeType: 'audio/pcm;rate=16000',
+          data: base64Data,
+        },
       },
     };
 
@@ -171,14 +177,15 @@ export class GeminiLiveClient {
   }
 
   /**
-   * Signals Gemini Live that the user turn is complete, triggering immediate response synthesis.
+   * Flushes buffered microphone audio when capture is paused or muted.
+   * Normal speech endings are handled exclusively by Gemini automatic VAD.
    */
-  public sendTurnComplete(): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+  public sendAudioStreamEnd(): void {
+    if (!this.ws || !this.getIsConnected() || this.ws.readyState !== WebSocket.OPEN) return;
 
     const msg = {
-      clientContent: {
-        turnComplete: true,
+      realtimeInput: {
+        audioStreamEnd: true,
       },
     };
 
@@ -189,7 +196,7 @@ export class GeminiLiveClient {
    * Sends typed text input into the active Live session for users who cannot speak.
    */
   public sendTextMessage(text: string): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !text.trim()) return;
+    if (!this.ws || !this.getIsConnected() || this.ws.readyState !== WebSocket.OPEN || !text.trim()) return;
 
     // Report user message to transcript callback
     this.config.onTranscriptChunk?.(text, true);

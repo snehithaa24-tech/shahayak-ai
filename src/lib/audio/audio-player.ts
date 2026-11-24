@@ -6,12 +6,19 @@ export interface AudioPlayerOptions {
   onSpeakingChange?: (isSpeaking: boolean) => void;
 }
 
+interface ScheduledLevel {
+  startTime: number;
+  endTime: number;
+  level: number;
+}
+
 export class AudioPlayer {
   private audioContext: AudioContext | null = null;
   private readonly sampleRate: number;
   private readonly maxQueueSize: number;
   private nextPlayTime = 0;
   private activeSources: Set<AudioBufferSourceNode> = new Set();
+  private scheduledLevels: ScheduledLevel[] = [];
   private isPlaying = false;
   private onSpeakingChange?: (isSpeaking: boolean) => void;
   private queueCount = 0;
@@ -80,7 +87,20 @@ export class AudioPlayer {
 
     const currentTime = ctx.currentTime;
     const startTime = Math.max(currentTime, this.nextPlayTime);
-    this.nextPlayTime = startTime + audioBuffer.duration;
+    const endTime = startTime + audioBuffer.duration;
+    this.nextPlayTime = endTime;
+
+    // Compute normalized RMS amplitude for real playback visualization
+    let sum = 0;
+    for (let i = 0; i < floatData.length; i++) {
+      sum += floatData[i] * floatData[i];
+    }
+    const rms = Math.sqrt(sum / floatData.length);
+    const level = Math.min(1, rms * 4.5);
+    this.scheduledLevels.push({ startTime, endTime, level });
+    if (this.scheduledLevels.length > this.maxQueueSize) {
+      this.scheduledLevels.shift();
+    }
 
     this.activeSources.add(source);
     this.queueCount++;
@@ -117,6 +137,7 @@ export class AudioPlayer {
       }
     }
     this.activeSources.clear();
+    this.scheduledLevels = [];
     this.queueCount = 0;
     this.nextPlayTime = 0;
 
@@ -143,6 +164,20 @@ export class AudioPlayer {
 
   public getIsPlaying(): boolean {
     return this.isPlaying;
+  }
+
+  public getCurrentLevel(): number {
+    if (!this.isPlaying || !this.audioContext || this.scheduledLevels.length === 0) {
+      return 0;
+    }
+
+    const now = this.audioContext.currentTime;
+    while (this.scheduledLevels.length > 0 && this.scheduledLevels[0].endTime < now) {
+      this.scheduledLevels.shift();
+    }
+
+    const current = this.scheduledLevels.find((entry) => now >= entry.startTime && now <= entry.endTime);
+    return current ? current.level : 0;
   }
 
   public getAudioContext(): AudioContext | null {

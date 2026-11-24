@@ -37,11 +37,16 @@ describe('Audio Interruption and Cleanup', () => {
       writable: true,
     });
 
-    // Queue chunk
-    const dummyPCM = new Uint8Array(4800); // 2400 samples
-    await player.queueAudioChunk(dummyPCM);
+    // Queue non-zero PCM signal to verify amplitude level tracking + interruption reset
+    const pcmBytes = new Uint8Array(4800);
+    const view = new DataView(pcmBytes.buffer);
+    for (let i = 0; i < 2400; i++) {
+      view.setInt16(i * 2, i % 2 === 0 ? 12000 : -12000, true);
+    }
+    await player.queueAudioChunk(pcmBytes);
 
     expect(player.getIsPlaying()).toBe(true);
+    expect(player.getCurrentLevel()).toBeGreaterThan(0);
     expect(mockSource.start).toHaveBeenCalled();
 
     // Trigger Interruption
@@ -50,6 +55,7 @@ describe('Audio Interruption and Cleanup', () => {
     expect(mockSource.stop).toHaveBeenCalled();
     expect(mockSource.disconnect).toHaveBeenCalled();
     expect(player.getIsPlaying()).toBe(false);
+    expect(player.getCurrentLevel()).toBe(0);
   });
 
   it('safely disposes audio context and resets state on teardown', async () => {

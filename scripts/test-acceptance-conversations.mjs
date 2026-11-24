@@ -1,6 +1,7 @@
 import { GoogleGenAI, Modality } from '@google/genai';
 import { WebSocket } from 'ws';
 import fs from 'fs';
+import assert from 'node:assert/strict';
 import { getSystemInstruction } from '../src/lib/prompt.ts';
 
 if (fs.existsSync('.env.local')) {
@@ -15,6 +16,10 @@ async function runAcceptanceTurn(language, promptText, session = null) {
     let ws = session?.ws;
     let audioBytes = 0;
     let responseText = '';
+    const timeout = setTimeout(() => {
+      ws?.close();
+      reject(new Error('Timed out waiting for Gemini response'));
+    }, 45000);
 
     const handleMessage = (data) => {
       try {
@@ -38,18 +43,17 @@ async function runAcceptanceTurn(language, promptText, session = null) {
         }
 
         if (msg.serverContent) {
+          responseText += msg.serverContent.outputTranscription?.text || '';
           if (msg.serverContent.modelTurn && Array.isArray(msg.serverContent.modelTurn.parts)) {
             for (const part of msg.serverContent.modelTurn.parts) {
               if (part.inlineData?.data) {
                 audioBytes += Buffer.from(part.inlineData.data, 'base64').length;
               }
-              if (part.text) {
-                responseText += part.text;
-              }
             }
           }
 
           if (msg.serverContent.turnComplete) {
+            clearTimeout(timeout);
             ws.off('message', handleMessage);
             resolve({ ws, audioBytes, responseText });
           }
@@ -72,6 +76,7 @@ async function runAcceptanceTurn(language, promptText, session = null) {
             model,
             config: {
               responseModalities: [Modality.AUDIO],
+              outputAudioTranscription: {},
               systemInstruction: { parts: [{ text: instruction }] },
             },
           },
@@ -132,6 +137,8 @@ async function testHindi() {
   console.log(`✔ Turn 2 Audio received: ${t2.audioBytes} bytes.`);
   if (t2.responseText) console.log(`✔ Turn 2 Response: "${t2.responseText}"`);
   t2.ws.close(1000, 'Done');
+  assert.ok(t1.audioBytes > 0 && t2.audioBytes > 0, 'Hindi turns must contain audio');
+  assert.match(t2.responseText, /रवि|ravi/i, 'Hindi follow-up must remember the user name');
   return { t1, t2 };
 }
 
@@ -147,6 +154,8 @@ async function testEnglish() {
   console.log(`✔ Turn 2 Audio received: ${t2.audioBytes} bytes.`);
   if (t2.responseText) console.log(`✔ Turn 2 Response: "${t2.responseText}"`);
   t2.ws.close(1000, 'Done');
+  assert.ok(t1.audioBytes > 0 && t2.audioBytes > 0, 'English turns must contain audio');
+  assert.match(t2.responseText, /maya/i, 'English follow-up must remember the user name');
   return { t1, t2 };
 }
 

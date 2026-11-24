@@ -5,6 +5,8 @@ import { AudioPlayer } from '@/lib/audio/audio-player';
 import { AudioRecorder } from '@/lib/audio/audio-recorder';
 import { GeminiLiveClient } from '@/lib/gemini/live-client';
 import {
+  type ErrorType,
+  type SaveStatus,
   type SessionState,
   type TranscriptTurn,
   type VoiceSessionError,
@@ -17,6 +19,12 @@ export interface UseVoiceSessionOptions {
   initialLanguage?: SupportedLanguage;
   saveTranscriptsDefault?: boolean;
   onTurnComplete?: (turn: TranscriptTurn) => void;
+  onConversationSaved?: () => void;
+}
+
+export interface AudioLevels {
+  mic: number;
+  assistant: number;
 }
 
 export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
@@ -26,19 +34,45 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
   const [transcripts, setTranscripts] = useState<TranscriptTurn[]>([]);
   const [interimUserText, setInterimUserText] = useState<string>('');
   const [interimAssistantText, setInterimAssistantText] = useState<string>('');
-  const [errorInfo, setErrorInfo] = useState<VoiceSessionError | null>(null);
+  const [rawError, setRawError] = useState<{ type: ErrorType; rawMsg?: string } | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [micVolume, setMicVolume] = useState<number>(0);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const [isSessionPersisted, setIsSessionPersisted] = useState<boolean>(false);
   const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [hasMicrophone, setHasMicrophone] = useState<boolean>(false);
 
-  // References to audio and network resources
+  // Refs for audio, transport, and high-frequency level sampling (avoids full-tree re-renders)
   const audioRecorderRef = useRef<AudioRecorder | null>(null);
   const audioPlayerRef = useRef<AudioPlayer | null>(null);
   const liveClientRef = useRef<GeminiLiveClient | null>(null);
   const currentAssistantTurnIdRef = useRef<string | null>(null);
   const assistantAccumulatedTextRef = useRef<string>('');
+  const userAccumulatedTextRef = useRef<string>('');
+  const micLevelRef = useRef<number>(0);
+  const isMutedRef = useRef<boolean>(false);
+  const hasMicrophoneRef = useRef<boolean>(false);
+  const turnCounterRef = useRef<number>(0);
+  const conversationIdRef = useRef<string | null>(null);
+  const saveSessionActiveRef = useRef<boolean>(false);
+  const languageRef = useRef<SupportedLanguage>(language);
 
-  // Clean up all resources
+  useEffect(() => {
+    languageRef.current = language;
+  }, [language]);
+
+  const getIdleConnectedState = useCallback((): SessionState => {
+    if (!hasMicrophoneRef.current) return 'Connected';
+    if (isMutedRef.current) return 'Muted';
+    return 'Listening';
+  }, []);
+
+  const getAudioLevels = useCallback((): AudioLevels => {
+    return {
+      mic: hasMicrophoneRef.current && !isMutedRef.current ? micLevelRef.current : 0,
+      assistant: audioPlayerRef.current ? audioPlayerRef.current.getCurrentLevel() : 0,
+    };
+  }, []);
+
   const cleanupResources = useCallback(async () => {
     if (audioRecorderRef.current) {
       audioRecorderRef.current.stop();
@@ -57,33 +91,80 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
 
     currentAssistantTurnIdRef.current = null;
     assistantAccumulatedTextRef.current = '';
-    setMicVolume(0);
+    userAccumulatedTextRef.current = '';
+    micLevelRef.current = 0;
+    isMutedRef.current = false;
+    hasMicrophoneRef.current = false;
     setIsMuted(false);
+    setHasMicrophone(false);
   }, []);
 
-  // Handle errors
   const triggerError = useCallback(
-    async (type: VoiceSessionError['type'], rawMsg?: string) => {
-      const { message, actionHint } = getErrorMessageAndHint(type, rawMsg);
-      setErrorInfo({ type, message, actionHint });
+    async (type: ErrorType, rawMsg?: string) => {
+      setRawError({ type, rawMsg });
       setSessionState('Error');
       await cleanupResources();
     },
     [cleanupResources]
   );
 
-  // Stop current turn playback on interruption
+  const dismissError = useCallback(() => {
+    setRawError(null);
+    setSessionState((prev) => (prev === 'Error' ? 'Ready' : prev));
+  }, []);
+
+  const errorInfo: VoiceSessionError | null = rawError
+    ? {
+        type: rawError.type,
+        ...getErrorMessageAndHint(rawError.type, rawError.rawMsg, language),
+      }
+    : null;
+
+  const persistTurnIfEnabled = useCallback(async (turn: TranscriptTurn) => {
+    const activeConvId = conversationIdRef.current;
+    if (!saveSessionActiveRef.current || !activeConvId) return;
+
+    setSaveStatus('saving');
+    try {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setSaveStatus('error');
+        return;
+      }
+
+      turnCounterRef.current += 1;
+      const { error } = await supabase.from('transcript_turns').insert({
+        conversation_id: activeConvId,
+        user_id: user.id,
+        role: turn.role,
+        content: turn.content,
+        language: turn.language,
+        turn_index: turnCounterRef.current,
+      });
+
+      if (error) {
+        console.warn('[Sahayak] Failed to save turn:', error.message);
+        setSaveStatus('error');
+      } else {
+        setSaveStatus('saved');
+        options.onConversationSaved?.();
+      }
+    } catch (saveErr) {
+      console.warn('[Sahayak] Failed to save turn:', saveErr);
+      setSaveStatus('error');
+    }
+  }, [options]);
+
   const handleInterruption = useCallback(() => {
-    console.log('[Sahayak] Interruption detected - stopping speech immediately.');
     if (audioPlayerRef.current) {
       audioPlayerRef.current.stopAndClear();
     }
     setInterimAssistantText('');
     assistantAccumulatedTextRef.current = '';
-    setSessionState('Listening');
-  }, []);
+    setSessionState(getIdleConnectedState());
+  }, [getIdleConnectedState]);
 
-  // Finalize assistant turn
   const finalizeAssistantTurn = useCallback(
     async (finalText: string) => {
       if (!finalText.trim()) return;
@@ -93,7 +174,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
         id: turnId,
         role: 'assistant',
         content: finalText.trim(),
-        language,
+        language: languageRef.current,
         timestamp: Date.now(),
         isFinal: true,
       };
@@ -110,41 +191,22 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
       assistantAccumulatedTextRef.current = '';
       currentAssistantTurnIdRef.current = null;
 
-      if (saveTranscripts && conversationId) {
-        try {
-          const supabase = createClient();
-          const { data: { user } } = await supabase.auth.getUser();
-          if (user) {
-            await supabase.from('transcript_turns').insert({
-              conversation_id: conversationId,
-              user_id: user.id,
-              role: 'assistant',
-              content: newTurn.content,
-              language: newTurn.language,
-              turn_index: Date.now(),
-            });
-          }
-        } catch (saveErr) {
-          console.warn('[Sahayak] Failed to save assistant turn:', saveErr);
-        }
-      }
-
+      await persistTurnIfEnabled(newTurn);
       options.onTurnComplete?.(newTurn);
     },
-    [conversationId, language, options, saveTranscripts]
+    [options, persistTurnIfEnabled]
   );
 
-  // Add final user turn
   const appendUserTurn = useCallback(
     async (text: string) => {
       if (!text.trim()) return;
 
-      const turnId = `user-${Date.now()}`;
+      const turnId = `user-${Date.now()}-${turnCounterRef.current + 1}`;
       const newTurn: TranscriptTurn = {
         id: turnId,
         role: 'user',
         content: text.trim(),
-        language,
+        language: languageRef.current,
         timestamp: Date.now(),
         isFinal: true,
       };
@@ -152,53 +214,75 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
       setTranscripts((prev) => [...prev, newTurn]);
       setInterimUserText('');
 
-      if (saveTranscripts && conversationId) {
-        try {
-          const supabase = createClient();
-          const { data: { user } } = await supabase.auth.getUser();
-          if (user) {
-            await supabase.from('transcript_turns').insert({
-              conversation_id: conversationId,
-              user_id: user.id,
-              role: 'user',
-              content: newTurn.content,
-              language: newTurn.language,
-              turn_index: Date.now(),
-            });
-          }
-        } catch (saveErr) {
-          console.warn('[Sahayak] Failed to save user turn:', saveErr);
-        }
-      }
-
+      await persistTurnIfEnabled(newTurn);
       options.onTurnComplete?.(newTurn);
     },
-    [conversationId, language, options, saveTranscripts]
+    [options, persistTurnIfEnabled]
   );
 
-  // Start voice or text session (MUST be triggered by user gesture)
+  const finalizeUserInput = useCallback(() => {
+    const text = userAccumulatedTextRef.current;
+    userAccumulatedTextRef.current = '';
+    if (text.trim()) void appendUserTurn(text);
+  }, [appendUserTurn]);
+
+  const attachMicrophone = useCallback(
+    async (liveClient: GeminiLiveClient, sharedCtx?: AudioContext) => {
+      setSessionState('RequestingPermission');
+      const recorder = new AudioRecorder({
+        targetSampleRate: 16000,
+        onAudioData: (pcm16Chunk) => {
+          liveClient.sendAudioChunk(pcm16Chunk);
+        },
+        onVolumeChange: (vol) => {
+          micLevelRef.current = vol;
+        },
+        // Gemini's VAD owns turn endings and interruptions. Local volume
+        // detection must not inject empty turns or interrupt on noise.
+      });
+
+      audioRecorderRef.current = recorder;
+      await recorder.start(sharedCtx);
+      hasMicrophoneRef.current = true;
+      isMutedRef.current = false;
+      setHasMicrophone(true);
+      setIsMuted(false);
+    },
+    []
+  );
+
+  // Start voice or typed session (MUST be triggered directly by a user gesture)
   const startSession = useCallback(
-    async (opts: { enableMic?: boolean } = {}) => {
+    async (opts: { enableMic?: boolean } = {}): Promise<boolean> => {
       const enableMic = opts.enableMic ?? true;
-      setErrorInfo(null);
+      await cleanupResources();
+
+      // Clear previous live session turns when beginning a fresh session
+      setTranscripts([]);
+      setInterimUserText('');
+      setInterimAssistantText('');
+      setRawError(null);
+      setSaveStatus('idle');
+      setIsSessionPersisted(false);
+      conversationIdRef.current = null;
+      setConversationId(null);
+      turnCounterRef.current = 0;
+      saveSessionActiveRef.current = saveTranscripts;
       setSessionState('Connecting');
 
       try {
-        // 1. Initialize AudioPlayer (unlocks Web Audio within the user gesture)
-        let player = audioPlayerRef.current;
-        if (!player) {
-          player = new AudioPlayer({
-            sampleRate: 24000,
-            onSpeakingChange: (isSpeaking) => {
-              if (isSpeaking) {
-                setSessionState('Speaking');
-              } else {
-                setSessionState((prev) => (prev === 'Speaking' ? 'Listening' : prev));
-              }
-            },
-          });
-          audioPlayerRef.current = player;
-        }
+        // 1. Initialize and unlock AudioPlayer within the user gesture
+        const player = new AudioPlayer({
+          sampleRate: 24000,
+          onSpeakingChange: (isSpeaking) => {
+            if (isSpeaking) {
+              setSessionState('Speaking');
+            } else {
+              setSessionState((prev) => (prev === 'Speaking' ? getIdleConnectedState() : prev));
+            }
+          },
+        });
+        audioPlayerRef.current = player;
         const sharedCtx = await player.ensureContext();
 
         // 2. Fetch short-lived ephemeral token from backend route
@@ -212,7 +296,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
           const errorData = await tokenRes.json().catch(() => ({}));
           if (tokenRes.status === 401) {
             await triggerError('unauthorized');
-            return;
+            return false;
           }
           if (tokenRes.status === 429) {
             if (errorData.error === 'quota_exhausted') {
@@ -220,14 +304,13 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
             } else {
               await triggerError('rate_limit_exceeded', errorData.message);
             }
-            return;
+            return false;
           }
           await triggerError('unknown', errorData.message || `Token request failed (${tokenRes.status})`);
-          return;
+          return false;
         }
 
         const { token, model } = await tokenRes.json();
-        console.log(`[Sahayak] Obtained token for live model: ${model}`);
 
         // 3. Connect to Gemini Live over WebSocket
         assistantAccumulatedTextRef.current = '';
@@ -235,19 +318,21 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
         const liveClient = new GeminiLiveClient({
           token,
           model,
-          onOpen: () => {
-            console.log('[Sahayak] Connected directly to Gemini Live WebSocket.');
-          },
           onAudioChunk: (pcmBytes) => {
+            finalizeUserInput();
             setSessionState('Speaking');
-            // If user was previously speaking, reset speech state
-            audioRecorderRef.current?.resetSpeechDetection();
-            player!.queueAudioChunk(pcmBytes);
+            void player.queueAudioChunk(pcmBytes);
+          },
+          onInputTranscription: (text, finished) => {
+            userAccumulatedTextRef.current += text;
+            setInterimUserText(userAccumulatedTextRef.current);
+            if (finished) finalizeUserInput();
           },
           onTranscriptChunk: (text, isUser) => {
             if (isUser) {
-              appendUserTurn(text);
+              void appendUserTurn(text);
             } else {
+              finalizeUserInput();
               setSessionState('Responding');
               assistantAccumulatedTextRef.current += text;
               setInterimAssistantText(assistantAccumulatedTextRef.current);
@@ -257,21 +342,24 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
             handleInterruption();
           },
           onTurnComplete: () => {
+            finalizeUserInput();
             if (assistantAccumulatedTextRef.current) {
-              finalizeAssistantTurn(assistantAccumulatedTextRef.current);
+              void finalizeAssistantTurn(assistantAccumulatedTextRef.current);
             }
             audioRecorderRef.current?.resetSpeechDetection();
-            setSessionState('Listening');
+            if (!player.getIsPlaying()) {
+              setSessionState(getIdleConnectedState());
+            }
           },
           onError: (_err, code) => {
             if (code === 'token_expired') {
-              triggerError('expired_credential');
+              void triggerError('expired_credential');
             } else if (code === 'quota_exhausted') {
-              triggerError('quota_exhausted');
+              void triggerError('quota_exhausted');
             } else if (code === 'network_loss') {
-              triggerError('network_loss');
+              void triggerError('network_loss');
             } else {
-              triggerError('unknown');
+              void triggerError('unknown');
             }
           },
         });
@@ -279,90 +367,94 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
         liveClientRef.current = liveClient;
         await liveClient.connect();
 
-        // 4. Request microphone and begin recording if enabled
+        // 4. Request microphone permission and start capture only if requested
         if (enableMic) {
-          const recorder = new AudioRecorder({
-            targetSampleRate: 16000,
-            onAudioData: (pcm16Chunk) => {
-              liveClient.sendAudioChunk(pcm16Chunk);
-            },
-            onVolumeChange: (vol) => {
-              setMicVolume(vol);
-            },
-            onSpeechStart: () => {
-              // If model was speaking when user begins talking, interrupt model
-              if (audioPlayerRef.current?.getIsPlaying()) {
-                handleInterruption();
-              }
-              setSessionState('Listening');
-            },
-            onSpeechEnd: () => {
-              if (audioPlayerRef.current?.getIsPlaying()) return;
-              console.log('[Sahayak] User speech paused/ended, triggering Gemini response.');
-              setSessionState('Responding');
-              liveClient.sendTurnComplete();
-            },
-            onError: (_err, code) => {
-              if (code === 'permission_denied') {
-                triggerError('permission_denied');
-              } else if (code === 'device_not_found') {
-                triggerError('device_not_found');
-              } else {
-                triggerError('unknown');
-              }
-            },
-          });
-
-          audioRecorderRef.current = recorder;
-          await recorder.start(sharedCtx);
+          await attachMicrophone(liveClient, sharedCtx);
         }
 
-        // 5. Setup conversation record in Supabase if save is enabled
+        // 5. Initialize confirmed saved conversation record in Supabase if opted in
         if (saveTranscripts) {
           try {
             const supabase = createClient();
             const { data: { user } } = await supabase.auth.getUser();
             if (user) {
-              const { data: conv } = await supabase
+              const { data: conv, error: convErr } = await supabase
                 .from('conversations')
                 .insert({
                   user_id: user.id,
-                  title: `${language === 'hi' ? 'बातचीत' : 'Conversation'} ${new Date().toLocaleDateString()}`,
+                  title: `${language === 'hi' ? 'बातचीत' : 'Conversation'} · ${new Date().toLocaleDateString()}`,
                   language,
                 })
                 .select('id')
                 .single();
 
-              if (conv) {
+              if (!convErr && conv) {
+                conversationIdRef.current = conv.id;
                 setConversationId(conv.id);
+                setIsSessionPersisted(true);
+              } else {
+                saveSessionActiveRef.current = false;
+                setSaveStatus('error');
               }
             }
           } catch (dbErr) {
             console.warn('[Sahayak] Conversation init error:', dbErr);
+            saveSessionActiveRef.current = false;
+            setSaveStatus('error');
           }
         }
 
-        setSessionState('Listening');
+        setSessionState(enableMic ? 'Listening' : 'Connected');
+        return true;
       } catch (err: unknown) {
         const error = err instanceof Error ? err : new Error(String(err));
-        if (error.name === 'NotAllowedError') {
+        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
           await triggerError('permission_denied');
+        } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+          await triggerError('device_not_found');
         } else {
           await triggerError('unknown', error.message);
         }
+        return false;
       }
     },
     [
+      appendUserTurn,
+      attachMicrophone,
+      cleanupResources,
+      finalizeAssistantTurn,
+      finalizeUserInput,
+      getIdleConnectedState,
+      handleInterruption,
       language,
       saveTranscripts,
       triggerError,
-      handleInterruption,
-      appendUserTurn,
-      finalizeAssistantTurn,
     ]
   );
 
-  // End voice session
+  // Enable microphone mid-session when started in typed-only mode
+  const enableMicrophoneInSession = useCallback(async () => {
+    const client = liveClientRef.current;
+    if (!client || !client.getIsConnected() || hasMicrophoneRef.current) return;
+
+    try {
+      const ctx = audioPlayerRef.current
+        ? await audioPlayerRef.current.ensureContext()
+        : undefined;
+      await attachMicrophone(client, ctx);
+      setSessionState(audioPlayerRef.current?.getIsPlaying() ? 'Speaking' : 'Listening');
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+        await triggerError('permission_denied');
+      } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+        await triggerError('device_not_found');
+      } else {
+        await triggerError('unknown', error.message);
+      }
+    }
+  }, [attachMicrophone, triggerError]);
+
   const endSession = useCallback(async () => {
     await cleanupResources();
     setSessionState('Ended');
@@ -370,39 +462,46 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     setInterimAssistantText('');
   }, [cleanupResources]);
 
-  // Toggle microphone mute
   const toggleMute = useCallback(() => {
-    if (audioRecorderRef.current) {
-      const nextMuted = !isMuted;
-      audioRecorderRef.current.setMuted(nextMuted);
-      setIsMuted(nextMuted);
-      if (nextMuted) {
-        setMicVolume(0);
-      }
-    }
-  }, [isMuted]);
+    if (!audioRecorderRef.current || !hasMicrophoneRef.current) return;
 
-  // Manually signal user turn complete (e.g. "Done Speaking" button)
-  const triggerTurnComplete = useCallback(() => {
-    if (liveClientRef.current && liveClientRef.current.getIsConnected()) {
-      console.log('[Sahayak] User tapped Done Speaking, sending turnComplete');
-      setSessionState('Responding');
-      liveClientRef.current.sendTurnComplete();
+    const nextMuted = !isMutedRef.current;
+    audioRecorderRef.current.setMuted(nextMuted);
+    isMutedRef.current = nextMuted;
+    setIsMuted(nextMuted);
+
+    if (nextMuted) {
+      liveClientRef.current?.sendAudioStreamEnd();
+      micLevelRef.current = 0;
+      setSessionState((prev) => (prev === 'Listening' ? 'Muted' : prev));
+    } else {
+      setSessionState((prev) => (prev === 'Muted' ? 'Listening' : prev));
     }
   }, []);
 
-  // Send typed message into Live session (connects automatically if not already started)
+  // Pause capture and flush buffered speech; unmute to speak again.
+  const triggerTurnComplete = useCallback(() => {
+    if (audioRecorderRef.current && hasMicrophoneRef.current && liveClientRef.current?.getIsConnected()) {
+      audioRecorderRef.current.setMuted(true);
+      isMutedRef.current = true;
+      setIsMuted(true);
+      micLevelRef.current = 0;
+      liveClientRef.current.sendAudioStreamEnd();
+      setSessionState((prev) => (prev === 'Listening' || prev === 'Muted' ? 'Responding' : prev));
+    }
+  }, []);
+
   const sendTypedMessage = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
 
-      // If not connected yet, initiate connection
       if (!liveClientRef.current || !liveClientRef.current.getIsConnected()) {
-        await startSession({ enableMic: false });
+        const started = await startSession({ enableMic: false });
+        if (!started) return;
       }
 
-      if (liveClientRef.current) {
+      if (liveClientRef.current?.getIsConnected()) {
         liveClientRef.current.sendTextMessage(trimmed);
         setSessionState('Responding');
       }
@@ -410,32 +509,47 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     [startSession]
   );
 
-  // Clear conversation transcript
+  // Clears current in-memory transcript and (if saved in Postgres) deletes that saved conversation row
   const clearTranscripts = useCallback(async () => {
     setTranscripts([]);
     setInterimUserText('');
     setInterimAssistantText('');
 
-    if (conversationId) {
+    const existingConvId = conversationIdRef.current;
+    if (existingConvId) {
       try {
         const supabase = createClient();
-        await supabase.from('conversations').delete().eq('id', conversationId);
+        const { error } = await supabase.from('conversations').delete().eq('id', existingConvId);
+        if (!error) {
+          conversationIdRef.current = null;
+          setConversationId(null);
+          setIsSessionPersisted(false);
+          setSaveStatus('idle');
+          options.onConversationSaved?.();
+        }
       } catch (err) {
         console.warn('[Sahayak] Failed to delete conversation:', err);
       }
-      setConversationId(null);
     }
-  }, [conversationId]);
+  }, [options]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
-      cleanupResources();
+      void cleanupResources();
     };
   }, [cleanupResources]);
 
+  // Derived display state: never expose 'Listening' while muted or lacking an active mic
+  const displayState: SessionState =
+    sessionState === 'Listening' && !hasMicrophone
+      ? 'Connected'
+      : sessionState === 'Listening' && isMuted
+      ? 'Muted'
+      : sessionState;
+
   return {
-    sessionState,
+    sessionState: displayState,
+    rawSessionState: sessionState,
     language,
     setLanguage,
     saveTranscripts,
@@ -444,9 +558,15 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     interimUserText,
     interimAssistantText,
     errorInfo,
-    micVolume,
+    dismissError,
     isMuted,
+    hasMicrophone,
+    conversationId,
+    isSessionPersisted,
+    saveStatus,
+    getAudioLevels,
     toggleMute,
+    enableMicrophoneInSession,
     triggerTurnComplete,
     startSession,
     endSession,

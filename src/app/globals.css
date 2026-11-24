@@ -1,31 +1,104 @@
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
 :root {
-  --background: #0f172a;
-  --foreground: #f8fafc;
-  --card-bg: #1e293b;
-  --card-border: #334155;
-  --accent: #3b82f6;
-  --accent-hover: #2563eb;
-  --accent-light: #60a5fa;
-  --success: #10b981;
-  --warning: #f59e0b;
-  --danger: #ef4444;
+  /* Palette: Quiet, Classic Editorial Audio */
+  --bg-canvas: #F7F5F0;
+  --bg-surface: #FFFEFB;
+  --bg-subtle: #EFECE4;
+  --bg-hover: #E7E3D9;
+
+  --ink-primary: #242822;
+  --ink-secondary: #5B625A;
+  --ink-muted: #676E66;
+
+  /* Forest green primary accent */
+  --accent-primary: #234D3C;
+  --accent-hover: #1A3B2E;
+  --accent-ink: #FFFEFB;
+  --accent-tint: #EAF1ED;
+  --accent-border: #B7CCC0;
+
+  /* Restrained burgundy for destructive / End Call actions */
+  --danger-primary: #8C2D2D;
+  --danger-hover: #732323;
+  --danger-tint: #F9EDED;
+  --danger-border: #DFBABA;
+  --danger-ink: #742222;
+
+  /* Warm ochre for muted / processing / caution states */
+  --warning-tint: #FBF4E4;
+  --warning-border: #DEC48E;
+  --warning-ink: #6D490E;
+
+  /* Soft slate for assistant speaking */
+  --speaking-primary: #2D4A53;
+  --speaking-tint: #EAEFF1;
+  --speaking-border: #B9C8CE;
+
+  /* Structural borders */
+  --border-subtle: #DEDCD4;
+  --border-strong: #C2BFB4;
+  --border-control: #8A877D;
+
+  /* Elevation */
+  --shadow-card: 0 1px 2px rgba(36, 40, 34, 0.04), 0 6px 20px rgba(36, 40, 34, 0.03);
+  --shadow-floating: 0 8px 30px rgba(36, 40, 34, 0.08), 0 1px 3px rgba(36, 40, 34, 0.05);
+
+  /* Motion */
+  --ease-calm: cubic-bezier(0.22, 1, 0.36, 1);
+  --duration-fast: 150ms;
+  --duration-normal: 240ms;
+}
+
+@theme inline {
+  --font-sans: var(--font-sans), var(--font-devanagari), "Nirmala UI", system-ui, -apple-system, sans-serif;
+  --font-serif: var(--font-serif), var(--font-devanagari), Georgia, serif;
+  --font-devanagari: var(--font-devanagari), var(--font-sans), "Nirmala UI", sans-serif;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: 'Plus Jakarta Sans', 'Noto Sans Devanagari', 'Nirmala UI', system-ui, -apple-system, sans-serif;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
+  background-color: var(--bg-canvas);
+  color: var(--ink-primary);
+  font-family: var(--font-sans), var(--font-devanagari), "Nirmala UI", system-ui, -apple-system, sans-serif;
+  line-height: 1.6;
 }
 
-/* Reduced motion support */
-@media (prefers-reduced-motion: reduce) {
+/* Editorial display typography with comfortable Devanagari metric clearance */
+.font-display {
+  font-family: var(--font-serif), var(--font-devanagari), Georgia, serif;
+  letter-spacing: -0.015em;
+}
 
+.font-devanagari-safe {
+  font-family: var(--font-devanagari), var(--font-sans), "Nirmala UI", sans-serif;
+  line-height: 1.75;
+}
+
+/* Keyboard focus visibility across all interactive elements */
+:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+/* Subtle breathing scale for connecting/preparing ring */
+@keyframes calm-breathe {
+  0%,
+  100% {
+    transform: scale(0.97);
+    opacity: 0.45;
+  }
+  50% {
+    transform: scale(1.04);
+    opacity: 0.75;
+  }
+}
+
+.animate-calm-breathe {
+  animation: calm-breathe 2.6s var(--ease-calm) infinite;
+}
+
+/* Respect reduced motion strictly */
+@media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
@@ -34,48 +107,4 @@ body {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
-}
-
-/* Accessible focus styling */
-:focus-visible {
-  outline: 2px solid var(--accent-light);
-  outline-offset: 3px;
-}
-
-/* Smooth pulse animation for microphone active listening */
-@keyframes mic-pulse {
-  0% {
-    transform: scale(1);
-    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7);
-  }
-
-  70% {
-    transform: scale(1.05);
-    box-shadow: 0 0 0 16px rgba(59, 130, 246, 0);
-  }
-
-  100% {
-    transform: scale(1);
-    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
-  }
-}
-
-@keyframes voice-wave {
-
-  0%,
-  100% {
-    height: 8px;
-  }
-
-  50% {
-    height: 28px;
-  }
-}
-
-.animate-mic-pulse {
-  animation: mic-pulse 2s infinite;
-}
-
-.voice-wave-bar {
-  animation: voice-wave 1.2s ease-in-out infinite;
 }
